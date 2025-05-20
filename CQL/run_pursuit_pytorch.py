@@ -15,8 +15,8 @@ LOG_FILE = 'pettingzoo_pursuit_CentralizedIQL_torch.csv'  # 更新日志文件�
 MODEL_SAVE_PATH = "./tmp/centralized_iql_pursuit_torch.ckpt"  # 更新模型保存路径
 
 # DQN 及学习过程的超参数
-LEARNING_RATE = 0.001
-REWARD_DECAY = 0.95
+LEARNING_RATE = 0.0003
+REWARD_DECAY = 0.99
 E_GREEDY_INITIAL = 0.9
 # E_GREEDY_INCREMENT = 0.0001
 
@@ -82,8 +82,8 @@ def run_pursuit_centralized_iql():  # 函数名更新
             print(f"模型将保存在当前工作目录。")
 
     aec_env = pursuit_v4.env(
-        n_pursuers=NUM_PURSUERS,
-        n_evaders=NUM_EVADERS,
+        # n_pursuers=NUM_PURSUERS,
+        # n_evaders=NUM_EVADERS,
         max_cycles=MAX_STEPS_PER_EPISODE
     )
     env = aec_to_parallel_wrapper(aec_env)
