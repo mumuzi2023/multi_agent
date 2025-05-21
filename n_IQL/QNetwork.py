@@ -8,8 +8,8 @@ import random
 
 class QNetwork(nn.Module):
     def __init__(self, n_features, n_actions,
-                 n_hidden1=50,  # 可调参数: Q网络第一个隐藏层的神经元数量
-                 n_hidden2=50):  # 可调参数: Q网络第二个隐藏层的神经元数量
+                 n_hidden1=50,
+                 n_hidden2=50):
         super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(n_features, n_hidden1)
         self.fc_hidden = nn.Linear(n_hidden1, n_hidden2)
@@ -26,7 +26,7 @@ class DeepQNetwork:
     def __init__(
             self,
             n_actions,
-            n_features,  # 注意：在中心化Q学习中，这个 n_features 将是联合状态的维度
+            n_features,
             learning_rate=0.01,
             reward_decay=0.9,
             e_greedy=0.9,
@@ -62,10 +62,6 @@ class DeepQNetwork:
         self.cost_his = []
 
     def store_transition(self, s, a, r, s_prime, done):
-        if self.n_features == 0:  # Should not happen if initialized correctly
-            print("Warning: n_features is 0. Cannot store transition.")
-            return
-
         transition = np.hstack((s, [a, r], s_prime, [1 if done else 0]))
         index = self.memory_counter % self.memory_size
         self.memory[index, :] = transition
@@ -95,6 +91,7 @@ class DeepQNetwork:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
     def learn(self):
+        # mem size
         if self.memory_counter < self.batch_size:
             return
 
@@ -102,29 +99,20 @@ class DeepQNetwork:
 
         sample_index = np.random.choice(min(self.memory_counter, self.memory_size), self.batch_size, replace=False)
         batch_memory = self.memory[sample_index, :]
-
-        # states 和 next_states 在中心化Q学习中是联合状态 S_joint 和 S'_joint
         states = torch.FloatTensor(batch_memory[:, :self.n_features]).to(self.device)
         actions = torch.LongTensor(batch_memory[:, self.n_features].astype(int)).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor(batch_memory[:, self.n_features + 1]).to(self.device)
         next_states = torch.FloatTensor(batch_memory[:, self.n_features + 2: self.n_features * 2 + 2]).to(self.device)
         dones = torch.FloatTensor(batch_memory[:, self.n_features * 2 + 2]).to(self.device)
-
-        # Get Q-values for current states and chosen actions
         q_eval = self.eval_net(states).gather(1, actions).squeeze(1)
-
-        # Get max Q-values for next states from target network
-        q_next_all = self.target_net(next_states).detach()  # detach: no gradients for target network
+        q_next_all = self.target_net(next_states).detach()
         q_next_max = q_next_all.max(1)[0]
-
-        # Compute target Q-values
-        q_target = rewards + self.gamma * q_next_max * (1 - dones)  # (1-dones) ensures Q_target=reward if done
-
-        # Compute loss
+        q_target = rewards + self.gamma * q_next_max * (1 - dones)
+        # loss
         loss = F.mse_loss(q_eval, q_target)
         self.cost_his.append(loss.item())
 
-        # Optimize the model
+        # Optimize
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -140,15 +128,7 @@ class DeepQNetwork:
 
     def load_model(self, path):
         self.eval_net.load_state_dict(torch.load(path, map_location=self.device))
-        self.target_net.load_state_dict(self.eval_net.state_dict())  # Sync target net
-        self.eval_net.eval()  # Set to evaluation mode if only for inference
+        self.target_net.load_state_dict(self.eval_net.state_dict())
+        self.eval_net.eval()
         self.target_net.eval()
         print(f"Model restored from path: {path}")
-
-    def plot_cost(self):
-        import matplotlib.pyplot as plt
-        plt.plot(np.arange(len(self.cost_his)), self.cost_his)
-        plt.ylabel('Cost')
-        plt.xlabel('Training Steps')
-        plt.title('DQN Training Cost')
-        plt.show()

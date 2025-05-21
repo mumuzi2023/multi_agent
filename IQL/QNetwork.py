@@ -8,8 +8,8 @@ import random
 
 class QNetwork(nn.Module):
     def __init__(self, n_features, n_actions,
-                 n_hidden1=50,  # 可调参数: Q网络第一个隐藏层的神经元数量
-                 n_hidden2=50):  # 可调参数: Q网络第二个隐藏层的神经元数量
+                 n_hidden1=50,
+                 n_hidden2=50):
         super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(n_features, n_hidden1)
         self.fc_hidden = nn.Linear(n_hidden1, n_hidden2)
@@ -26,7 +26,7 @@ class DeepQNetwork:
     def __init__(
             self,
             n_actions,
-            n_features,  # 注意：在中心化Q学习中，这个 n_features 将是联合状态的维度
+            n_features,
             learning_rate=0.01,
             reward_decay=0.9,
             e_greedy=0.9,
@@ -46,7 +46,6 @@ class DeepQNetwork:
         self.batch_size = batch_size
         self.epsilon_increment = e_greedy_increment
         self.epsilon = 0 if e_greedy_increment is not None else self.epsilon_max
-
         self.device = device
 
         self.learn_step_counter = 0
@@ -63,9 +62,6 @@ class DeepQNetwork:
         self.cost_his = []
 
     def store_transition(self, s, a, r, s_prime, done):
-        if self.n_features == 0:  # Should not happen if initialized correctly
-            print("Warning: n_features is 0. Cannot store transition.")
-            return
         transition = np.hstack((s, [a, r], s_prime, [1 if done else 0]))
         index = self.memory_counter % self.memory_size
         self.memory[index, :] = transition
@@ -95,6 +91,7 @@ class DeepQNetwork:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
     def learn(self):
+        # mem size
         if self.memory_counter < self.batch_size:
             return
 
@@ -102,34 +99,22 @@ class DeepQNetwork:
 
         sample_index = np.random.choice(min(self.memory_counter, self.memory_size), self.batch_size, replace=False)
         batch_memory = self.memory[sample_index, :]
-
-        # states 和 next_states 在中心化Q学习中是联合状态 S_joint 和 S'_joint
         states = torch.FloatTensor(batch_memory[:, :self.n_features]).to(self.device)
-        # actions_from_data 是智能体 i 的局部动作 a_i
-        actions_from_data = torch.LongTensor(batch_memory[:, self.n_features].astype(int)).unsqueeze(1).to(self.device)
-        # rewards 是智能体 i 的局部奖励 r_i
+        actions = torch.LongTensor(batch_memory[:, self.n_features].astype(int)).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor(batch_memory[:, self.n_features + 1]).to(self.device)
         next_states = torch.FloatTensor(batch_memory[:, self.n_features + 2: self.n_features * 2 + 2]).to(self.device)
         dones = torch.FloatTensor(batch_memory[:, self.n_features * 2 + 2]).to(self.device)
+        q_eval = self.eval_net(states).gather(1, actions).squeeze(1)
+        q_next_all = self.target_net(next_states).detach()
+        q_next_max = q_next_all.max(1)[0]
+        q_target = rewards + self.gamma * q_next_max * (1 - dones)
+        # loss
+        loss = F.mse_loss(q_eval, q_target)
+        self.cost_his.append(loss.item())
 
-        # --- 计算标准的贝尔曼损失 (Bellman Loss) ---
-        # q_eval_all_actions 是 Q_eval(S_joint, a_all_local)
-        q_eval_all_actions = self.eval_net(states)
-        # q_eval_data_actions 是 Q_eval(S_joint, a_i)
-        q_eval_data_actions = q_eval_all_actions.gather(1, actions_from_data).squeeze(1)
-
-        with torch.no_grad():
-            q_next_all_actions_target = self.target_net(next_states)  # Q_target(S'_joint, a'_all_local)
-            q_next_max_target = q_next_all_actions_target.max(1)[0]  # max_{a'} Q_target(S'_joint, a')
-            q_target_bellman = rewards + self.gamma * q_next_max_target * (1 - dones)
-
-        bellman_loss = F.mse_loss(q_eval_data_actions, q_target_bellman)
-
-        self.cost_his.append(bellman_loss.item())  # 只记录贝尔曼损失
-
-        # --- 优化模型 ---
+        # Optimize
         self.optimizer.zero_grad()
-        bellman_loss.backward()  # 只反向传播贝尔曼损失
+        loss.backward()
         self.optimizer.step()
 
         if self.epsilon_increment is not None:
@@ -143,15 +128,7 @@ class DeepQNetwork:
 
     def load_model(self, path):
         self.eval_net.load_state_dict(torch.load(path, map_location=self.device))
-        self.target_net.load_state_dict(self.eval_net.state_dict())  # Sync target net
-        self.eval_net.eval()  # Set to evaluation mode if only for inference
+        self.target_net.load_state_dict(self.eval_net.state_dict())
+        self.eval_net.eval()
         self.target_net.eval()
         print(f"Model restored from path: {path}")
-
-    def plot_cost(self):
-        import matplotlib.pyplot as plt
-        plt.plot(np.arange(len(self.cost_his)), self.cost_his)
-        plt.ylabel('Cost')
-        plt.xlabel('Training Steps')
-        plt.title('DQN Training Cost')
-        plt.show()
