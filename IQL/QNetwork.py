@@ -68,7 +68,7 @@ class DeepQNetwork:
         self.memory_counter += 1
 
     def choose_action(self, observation, action_mask, execution=False):
-        current_epsilon = 1.0 if execution else self.epsilon
+        current_epsilon = 0.90 if execution else self.epsilon
         if np.random.uniform() < current_epsilon:
             observation_tensor = torch.FloatTensor(observation).unsqueeze(0).to(self.device)
             with torch.no_grad():
