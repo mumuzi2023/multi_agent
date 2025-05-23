@@ -4,16 +4,12 @@ import numpy as np
 from pettingzoo import AECEnv
 from pettingzoo.utils import agent_selector
 from pettingzoo.utils.env import ObsType, ActionType
-
-try:
-    import pygame
-except ImportError:
-    pygame = None
+import pygame
 
 
-class CooperativeHarvestingEnvAutoRespawn(AECEnv):
+class CooperativeHarvestEnv(AECEnv):
     metadata = {
-        "name": "cooperative_harvesting_v2.4_square_obs_viz",  # Updated name
+        "name": "cooperative_harvest",
         "render_modes": ["human", "rgb_array"],
         "is_parallelizable": True,
     }
@@ -35,12 +31,12 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
         self.num_harvesters = num_harvesters
         self.initial_num_fruits = num_fruits
         self.observation_radius = observation_radius
-
+        # init random level
         self._harvester_levels_initial_list = [np.random.randint(1, 3 + 1) for _ in range(self.num_harvesters)]
         if self.initial_num_fruits == 0:
-            self._fruit_levels_initial_list = []
+            self.fruit_levels_i = []
         else:
-            self._fruit_levels_initial_list = [np.random.randint(1, 4 + 1) for _ in range(self.initial_num_fruits)]
+            self.fruit_levels_i = [np.random.randint(1, 4 + 1) for _ in range(self.initial_num_fruits)]
 
         self.max_cycles = max_cycles
         self.render_mode = render_mode
@@ -100,23 +96,23 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
                 pos = all_coords[coord_idx]; coord_idx += 1
             else:
                 pos = (np.random.randint(self.grid_length), np.random.randint(self.grid_height))
-            level = self._fruit_levels_initial_list[i]
+            level = self.fruit_levels_i[i]
             self.fruits_data.append({"id": f"fruit_{i}", "pos": pos, "level": level, "status": "available"})
         self.next_fruit_id_counter = self.initial_num_fruits
 
     def reset(self, seed=None, options=None):
         if seed is not None: np.random.seed(seed)
         self.agents = self.possible_agents[:]
-        self.rewards = {agent: 0.0 for agent in self.possible_agents}
+        self.rewards = {agent: 0.0 for agent in self.possible_agents};
         self._cumulative_rewards = {agent: 0.0 for agent in self.possible_agents}
-        self.terminations = {agent: False for agent in self.possible_agents}
+        self.terminations = {agent: False for agent in self.possible_agents};
         self.truncations = {agent: False for agent in self.possible_agents}
         self.infos = {agent: {} for agent in self.possible_agents}
         self._harvester_levels_initial_list = [np.random.randint(1, 3 + 1) for _ in range(self.num_harvesters)]
         if self.initial_num_fruits == 0:
-            self._fruit_levels_initial_list = []
+            self.fruit_levels_i = []
         else:
-            self._fruit_levels_initial_list = [np.random.randint(1, 4 + 1) for _ in range(self.initial_num_fruits)]
+            self.fruit_levels_i = [np.random.randint(1, 4 + 1) for _ in range(self.initial_num_fruits)]
         self.harvester_levels = {agent: self._harvester_levels_initial_list[self.agent_name_mapping[agent]] for agent in
                                  self.possible_agents}
         self._place_entities()
@@ -125,7 +121,7 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
         self._agent_selector.reinit(self.agents)
         self.agent_selection = self._agent_selector.next()
 
-    def _respawn_fruit_from_harvested(self, harvested_fruit_id_to_remove):
+    def respawn_fruit(self, harvested_fruit_id_to_remove):
         found_fruit_obj = next((f for f in self.fruits_data if f["id"] == harvested_fruit_id_to_remove), None)
         if found_fruit_obj:
             self.fruits_data.remove(found_fruit_obj)
@@ -142,28 +138,31 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
         self.next_fruit_id_counter += 1
         self.fruits_data.append({"id": new_fruit_id, "pos": new_pos, "level": new_level, "status": "available"})
 
-    def _check_and_process_automatic_harvests(self):
+    def harvests(self):
         harvests_to_process = []
+        # check fruits
         for fruit_obj in self.fruits_data:
             if fruit_obj["status"] != "available": continue
-            harvesters_near_or_on_fruit = []
+            harvesters_fruit = []
             fruit_pos_x, fruit_pos_y = fruit_obj["pos"]
             for agent_id, harvester_pos_tuple in self.harvester_positions.items():
                 if not (self.terminations.get(agent_id, False) or self.truncations.get(agent_id, False)):
                     harvester_pos_x, harvester_pos_y = harvester_pos_tuple
                     if abs(harvester_pos_x - fruit_pos_x) + abs(harvester_pos_y - fruit_pos_y) <= 1:
-                        harvesters_near_or_on_fruit.append(agent_id)
-            if not harvesters_near_or_on_fruit: continue
+                        harvesters_fruit.append(agent_id)
+            if not harvesters_fruit: continue
             solo_h_id = next(
-                (h_id for h_id in harvesters_near_or_on_fruit if self.harvester_levels[h_id] >= fruit_obj["level"]),
+                (h_id for h_id in harvesters_fruit if self.harvester_levels[h_id] >= fruit_obj["level"]),
                 None)
+            # check harvests validity
             if solo_h_id:
                 if not any(h["fruit_id"] == fruit_obj["id"] for h in harvests_to_process): harvests_to_process.append(
                     {"fruit_id": fruit_obj["id"], "harvesters": [solo_h_id], "type": "solo"})
                 continue
-            if sum(self.harvester_levels[h_id] for h_id in harvesters_near_or_on_fruit) >= fruit_obj["level"]:
+            if sum(self.harvester_levels[h_id] for h_id in harvesters_fruit) >= fruit_obj["level"]:
                 if not any(h["fruit_id"] == fruit_obj["id"] for h in harvests_to_process): harvests_to_process.append(
-                    {"fruit_id": fruit_obj["id"], "harvesters": list(harvesters_near_or_on_fruit), "type": "coop"})
+                    {"fruit_id": fruit_obj["id"], "harvesters": list(harvesters_fruit), "type": "coop"})
+        # harvest
         for h_info in harvests_to_process:
             target_fruit = next((f for f in self.fruits_data if f["id"] == h_info["fruit_id"]), None)
             if target_fruit and target_fruit["status"] == "available":
@@ -171,9 +170,9 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
                 if h_info["type"] == "solo":
                     self.rewards[h_info["harvesters"][0]] = self.rewards.get(h_info["harvesters"][0], 0.0) + 10.0
                 elif h_info["type"] == "coop":
-                    rew = 8.0 / len(h_info["harvesters"]) if h_info["harvesters"] else 0.0
+                    rew = 10.0 / len(h_info["harvesters"]) if h_info["harvesters"] else 0.0
                     for h_id in h_info["harvesters"]: self.rewards[h_id] = self.rewards.get(h_id, 0.0) + rew
-                self._respawn_fruit_from_harvested(target_fruit["id"])
+                self.respawn_fruit(target_fruit["id"])
 
     def step(self, action: ActionType):
         agent = self.agent_selection
@@ -192,7 +191,7 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
             new_pos_x = min(self.grid_length - 1, current_pos[0] + 1)
         self.harvester_positions[agent] = (new_pos_x, new_pos_y)
         self.rewards[agent] += step_reward
-        self._check_and_process_automatic_harvests()
+        self.harvests()
         if self._agent_selector.is_last(): self.num_cycles += 1
         if self.num_cycles >= self.max_cycles:
             for ag in self.possible_agents: self.truncations[ag] = True
@@ -207,31 +206,30 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
 
         obs_list.extend([float(agent_x), float(agent_y), float(agent_level)])
 
-        # Fruit information
+        # observe fruit
         for i in range(self.initial_num_fruits):
             if i < len(self.fruits_data):
                 fruit = self.fruits_data[i]
-                fruit_x_coord, fruit_y_coord = fruit["pos"]
-                chebyshev_distance_to_fruit = max(abs(fruit_x_coord - agent_x), abs(fruit_y_coord - agent_y))
+                f_x, f_y = fruit["pos"]
+                dis = max(abs(f_x - agent_x), abs(f_y - agent_y))
 
-                if chebyshev_distance_to_fruit <= self.observation_radius:
-                    rel_pos_x = float(fruit_x_coord - agent_x)
-                    rel_pos_y = float(fruit_y_coord - agent_y)
+                if dis <= self.observation_radius:
+                    rel_pos_x = float(f_x - agent_x)
+                    rel_pos_y = float(f_y - agent_y)
                     status_numeric = 1.0 if fruit["status"] == "available" else 0.0
                     obs_list.extend([rel_pos_x, rel_pos_y, float(fruit["level"]), status_numeric])
                 else:
                     obs_list.extend([0.0, 0.0, 0.0, 0.0])
             else:
                 obs_list.extend([0.0, 0.0, 0.0, 0.0])
-
-        # Other harvester information
+        # observe agent
         for other_agent_id_val in self.possible_agents:
             if other_agent_id_val == agent_id: continue
-            other_harvester_pos_tuple = self.harvester_positions[other_agent_id_val]
-            other_x, other_y = other_harvester_pos_tuple
-            chebyshev_distance_to_other = max(abs(other_x - agent_x), abs(other_y - agent_y))
+            other_h = self.harvester_positions[other_agent_id_val]
+            other_x, other_y = other_h
+            dis = max(abs(other_x - agent_x), abs(other_y - agent_y))
 
-            if chebyshev_distance_to_other <= self.observation_radius:
+            if dis <= self.observation_radius:
                 other_level_val = self.harvester_levels[other_agent_id_val]
                 rel_pos_x = float(other_x - agent_x)
                 rel_pos_y = float(other_y - agent_y)
@@ -250,9 +248,8 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
 
     def render(self):
         if self.render_mode is None: return
-        if pygame is None and self.render_mode == "human": raise ImportError("Pygame not installed.")
         if self.render_mode == "human" and self.window is None:
-            pygame.init();
+            pygame.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(
                 (self.grid_length * self.cell_size, self.grid_height * self.cell_size))
@@ -270,6 +267,8 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
                                                                (self.grid_length * self.cell_size, r * self.cell_size))
         for c in range(self.grid_length + 1): pygame.draw.line(canvas, (200, 200, 200), (c * self.cell_size, 0),
                                                                (c * self.cell_size, self.grid_height * self.cell_size))
+
+        # Draw all observation square
         if self.render_mode == "human" and self.observation_radius != float('inf'):
             overlay_surface = pygame.Surface((self.grid_length * self.cell_size, self.grid_height * self.cell_size),
                                              pygame.SRCALPHA)
@@ -283,7 +282,6 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
 
                     agent_pos_x, agent_pos_y = self.harvester_positions[agent_id_to_visualize]
                     R = self.observation_radius
-
                     min_r_clamped = max(0, agent_pos_y - R)
                     max_r_clamped = min(self.grid_height - 1, agent_pos_y + R)
                     min_c_clamped = max(0, agent_pos_x - R)
@@ -299,6 +297,8 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
                                 pygame.draw.rect(overlay_surface, obs_area_fill_color, cell_rect)
 
             canvas.blit(overlay_surface, (0, 0))
+
+        # Draw observation outlines
         if self.render_mode == "human" and self.observation_radius != float('inf'):
             obs_area_outline_color = (40, 40, 100, 150)
 
@@ -309,6 +309,7 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
 
                     agent_pos_x, agent_pos_y = self.harvester_positions[agent_id_to_visualize]
                     R = self.observation_radius
+
                     outline_start_c = max(0, agent_pos_x - R)
                     outline_end_c = min(self.grid_length - 1, agent_pos_x + R)
                     outline_start_r = max(0, agent_pos_y - R)
@@ -323,17 +324,17 @@ class CooperativeHarvestingEnvAutoRespawn(AECEnv):
                         )
                         pygame.draw.rect(canvas, obs_area_outline_color, outline_rect_pixel, width=1)
 
-        # Fruit
+        # Draw fruits
         for fruit in self.fruits_data:
             fruit_color = (0, 180, 0) if fruit["status"] == "available" else (100, 100, 100)
-            cx = int((fruit["pos"][0] + 0.5) * self.cell_size);
+            cx = int((fruit["pos"][0] + 0.5) * self.cell_size)
             cy = int((fruit["pos"][1] + 0.5) * self.cell_size)
             pygame.draw.circle(canvas, fruit_color, (cx, cy), int(self.cell_size * 0.30))
             lvl_txt = self.font.render(str(fruit["level"]), True, (0, 0, 0))
             canvas.blit(lvl_txt, (cx - lvl_txt.get_width() // 2,
                                   cy - int(self.cell_size * 0.35) - lvl_txt.get_height() // 2))
 
-        # Harvester
+        # Draw harvesters
         for agent_id_render in self.possible_agents:
             if agent_id_render not in self.harvester_positions: continue
             is_term = self.terminations.get(agent_id_render, False)
@@ -375,14 +376,14 @@ if __name__ == "__main__":
         "max_cycles": 150,
         "render_mode": "human",
         "cell_size": 35,
-        "observation_radius": 4
+        "observation_radius": 2
     }
 
-    env = CooperativeHarvestingEnvAutoRespawn(**env_config)
+    env = CooperativeHarvestEnv(**env_config)
 
     max_episodes = 3
     for episode_count in range(max_episodes):
-        print(f"\n--- Episode {episode_count + 1} ---")
+        print(f"\n------ Episode {episode_count + 1} ---")
         env.reset(seed=np.random.randint(100000) + episode_count)
         for agent_step_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
@@ -391,8 +392,7 @@ if __name__ == "__main__":
             else:
                 action = env.action_space(agent_step_id).sample()
             env.step(action)
-        if env.render_mode == "human": env.render()  # Render final state too for clarity
+        if env.render_mode == "human": env.render()
         print(f"Episode {episode_count + 1} finished after {env.num_cycles} cycles.")
         print(f"Cumulative rewards for episode: {env._cumulative_rewards}")
     env.close()
-    print("\nEnvironment closed.")

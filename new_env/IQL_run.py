@@ -1,4 +1,4 @@
-from pettingzoo.sisl import pursuit_v4
+from cooperative_harvest_env import  CooperativeHarvestEnv
 from pettingzoo.utils.conversions import aec_to_parallel_wrapper
 from QNetwork import DeepQNetwork
 import csv
@@ -14,8 +14,8 @@ LOG_FILE = 'IQL_log.csv'
 LOG_FILE_n = 'IQL_log_n.csv'
 MODEL_SAVE_PATH = "./tmp/IQL.ckpt"
 
-# hyperparameters
-LEARNING_RATE = 0.0001
+# Learning hyperparameters
+LEARNING_RATE = 0.00001
 REWARD_DECAY = 0.95
 E_GREEDY_INITIAL = 0.9
 REPLACE_TARGET_ITER = 200
@@ -23,9 +23,12 @@ MEMORY_SIZE = 10000
 BATCH_SIZE = 64
 WARMUP_STEPS = 500
 LEARN_EVERY_STEPS = 4
-MAX_STEPS_PER_EPISODE = 500
-# NUM_PURSUERS = 8
-# NUM_EVADERS = 10
+MAX_STEPS_PER_EPISODE = 200
+GRID_HEIGHT = 10
+GRID_LENGTH = 10
+NUM_HARVESTERS = 3
+NUM_FRUITS = 5
+OBSERVATION_RADIUS = 3
 
 def set_seeds(seed_value):
     np.random.seed(seed_value)
@@ -37,11 +40,8 @@ def set_seeds(seed_value):
         torch.backends.cudnn.benchmark = False
 
 
-def change_observation(observation_data, is_dict_observation_space):
-    if is_dict_observation_space:
-        pixel_observation = observation_data['observation']
-    else:
-        pixel_observation = observation_data
+def change_observation(observation_data):
+    pixel_observation = observation_data
     return pixel_observation.flatten().astype(np.float32)
 
 
@@ -51,28 +51,25 @@ def run_pursuit_parallel():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    aec_env = pursuit_v4.env(
-        # n_pursuers=NUM_PURSUERS,
-        # n_evaders=NUM_EVADERS,
-        max_cycles=MAX_STEPS_PER_EPISODE
+    aec_env = CooperativeHarvestEnv(
+        grid_height=GRID_HEIGHT,
+        grid_length=GRID_LENGTH,
+        num_harvesters=NUM_HARVESTERS,
+        num_fruits=NUM_FRUITS,
+        max_cycles=MAX_STEPS_PER_EPISODE,
+        observation_radius=OBSERVATION_RADIUS,
+        render_mode=None
     )
     env = aec_to_parallel_wrapper(aec_env)
 
     first_agent_for_space_check = env.possible_agents[0]
     agent_raw_obs_space = env.observation_space(first_agent_for_space_check)
 
-    is_dict_observation_space = isinstance(agent_raw_obs_space, gymnasium.spaces.Dict)
-
-    if is_dict_observation_space:
-        print("Observation space is a Dict. Extracting 'observation' for pixel data.")
-        pixel_obs_space = agent_raw_obs_space['observation']
-    elif isinstance(agent_raw_obs_space, gymnasium.spaces.Box):
-        print("Warning: Observation space is a Box, not a Dict. Assuming direct pixel data.")
-        print("Action mask will be expected in the 'info' dictionary from env.step().")
-        pixel_obs_space = agent_raw_obs_space
+    pixel_obs_space = agent_raw_obs_space
 
     obs_shape = pixel_obs_space.shape
     N_FEATURES = np.prod(obs_shape)
+
     N_ACTIONS = env.action_space(first_agent_for_space_check).n
 
     print(f"Number of features: {N_FEATURES}")
@@ -104,15 +101,16 @@ def run_pursuit_parallel():
         # Init observations
         current_processed_observations = {}
         for agent_id, raw_obs in current_observations_dict.items():
-            current_processed_observations[agent_id] = change_observation(raw_obs, is_dict_observation_space)
+            current_processed_observations[agent_id] = change_observation(raw_obs )
         episode_rewards_sum = {agent: 0.0 for agent in env.possible_agents}
+
         for step_in_episode in range(MAX_STEPS_PER_EPISODE):
 
             actions_to_take_dict = {}
             for agent_id in env.agents:
                 processed_obs_for_agent = current_processed_observations[agent_id]
                 action_mask = np.ones(N_ACTIONS, dtype=np.int8)
-                actions_to_take_dict[agent_id] = RL.choose_action(processed_obs_for_agent, action_mask)
+                actions_to_take_dict[agent_id] = RL.choose_action(processed_obs_for_agent,action_mask)
 
             # Act
             next_observations_dict, rewards_dict, terminated_dict, truncated_dict, next_infos_dict = env.step(
@@ -123,10 +121,10 @@ def run_pursuit_parallel():
                 s = current_processed_observations[agent_id_acted]
                 a = actions_to_take_dict[agent_id_acted]
                 r = rewards_dict.get(agent_id_acted, 0.0)
-                terminated = terminated_dict.get(agent_id_acted, False)
+                terminated = terminated_dict.get(agent_id_acted, False) or truncated_dict.get(agent_id_acted, False)
 
                 if agent_id_acted in next_observations_dict:
-                    s_prime = change_observation(next_observations_dict[agent_id_acted], is_dict_observation_space)
+                    s_prime = change_observation(next_observations_dict[agent_id_acted] )
                 else:
                     s_prime = np.zeros_like(s)
 
@@ -137,7 +135,7 @@ def run_pursuit_parallel():
             current_observations_dict = next_observations_dict
             current_processed_observations.clear()
             for agent_id, raw_obs in current_observations_dict.items():
-                current_processed_observations[agent_id] = change_observation(raw_obs, is_dict_observation_space)
+                current_processed_observations[agent_id] = change_observation(raw_obs )
 
             global_step_counter += 1
             if global_step_counter > WARMUP_STEPS and \
@@ -155,12 +153,12 @@ def run_pursuit_parallel():
         if (episode + 1) % 10 == 0:
             #=================================test=================================================================
             avg_reward=0
-            for SEED_test in [0,1,2,3]:
+            for SEED_test in [0,1,2,3,4]:
                 current_observations_dict, current_infos_dict = env.reset(seed=SEED_test + episode*4)
                 # Init observations
                 current_processed_observations = {}
                 for agent_id, raw_obs in current_observations_dict.items():
-                    current_processed_observations[agent_id] = change_observation(raw_obs, is_dict_observation_space)
+                    current_processed_observations[agent_id] = change_observation(raw_obs )
                 episode_rewards_sum = {agent: 0.0 for agent in env.possible_agents}
                 for step_in_episode in range(MAX_STEPS_PER_EPISODE):
 
@@ -181,12 +179,12 @@ def run_pursuit_parallel():
                     current_observations_dict = next_observations_dict
                     current_processed_observations.clear()
                     for agent_id, raw_obs in current_observations_dict.items():
-                        current_processed_observations[agent_id] = change_observation(raw_obs, is_dict_observation_space)
+                        current_processed_observations[agent_id] = change_observation(raw_obs )
 
                 num_total_agents = len(env.possible_agents)
                 avg_episode_reward1 = sum(episode_rewards_sum.values()) / num_total_agents if num_total_agents > 0 else 0.0
                 avg_reward+=avg_episode_reward1
-            avg_reward/=4
+            avg_reward/=5
             with open(LOG_FILE_n, 'a', newline='') as myfile:
                 writer = csv.writer(myfile)
                 writer.writerow([episode + 1, avg_reward])

@@ -1,4 +1,4 @@
-from pettingzoo.sisl import pursuit_v4
+from cooperative_harvest_env import  CooperativeHarvestEnv
 from pettingzoo.utils.conversions import aec_to_parallel_wrapper
 from QNetwork import DeepQNetwork
 import csv
@@ -14,8 +14,8 @@ LOG_FILE = 'IQL_log.csv'
 LOG_FILE_n = 'IQL_log_n.csv'
 MODEL_SAVE_PATH = "./tmp/IQL.ckpt"
 
-# hyperparameters
-LEARNING_RATE = 0.0001
+# Learning hyperparameters
+LEARNING_RATE = 0.00001
 REWARD_DECAY = 0.95
 E_GREEDY_INITIAL = 0.9
 REPLACE_TARGET_ITER = 200
@@ -23,9 +23,12 @@ MEMORY_SIZE = 10000
 BATCH_SIZE = 64
 WARMUP_STEPS = 500
 LEARN_EVERY_STEPS = 4
-MAX_STEPS_PER_EPISODE = 500
-# NUM_PURSUERS = 8
-# NUM_EVADERS = 10
+MAX_STEPS_PER_EPISODE = 200
+GRID_HEIGHT = 10
+GRID_LENGTH = 10
+NUM_HARVESTERS = 3
+NUM_FRUITS = 5
+OBSERVATION_RADIUS = 3
 
 def set_seeds(seed_value):
     np.random.seed(seed_value)
@@ -48,10 +51,14 @@ def run_pursuit_parallel():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    aec_env = pursuit_v4.env(
-        # n_pursuers=NUM_PURSUERS,
-        # n_evaders=NUM_EVADERS,
-        max_cycles=MAX_STEPS_PER_EPISODE
+    aec_env = CooperativeHarvestEnv(
+        grid_height=GRID_HEIGHT,
+        grid_length=GRID_LENGTH,
+        num_harvesters=NUM_HARVESTERS,
+        num_fruits=NUM_FRUITS,
+        max_cycles=MAX_STEPS_PER_EPISODE,
+        observation_radius=OBSERVATION_RADIUS,
+        render_mode=None
     )
     env = aec_to_parallel_wrapper(aec_env)
 
@@ -62,6 +69,7 @@ def run_pursuit_parallel():
 
     obs_shape = pixel_obs_space.shape
     N_FEATURES = np.prod(obs_shape)
+
     N_ACTIONS = env.action_space(first_agent_for_space_check).n
 
     print(f"Number of features: {N_FEATURES}")
@@ -95,13 +103,14 @@ def run_pursuit_parallel():
         for agent_id, raw_obs in current_observations_dict.items():
             current_processed_observations[agent_id] = change_observation(raw_obs )
         episode_rewards_sum = {agent: 0.0 for agent in env.possible_agents}
+
         for step_in_episode in range(MAX_STEPS_PER_EPISODE):
 
             actions_to_take_dict = {}
             for agent_id in env.agents:
                 processed_obs_for_agent = current_processed_observations[agent_id]
                 action_mask = np.ones(N_ACTIONS, dtype=np.int8)
-                actions_to_take_dict[agent_id] = RL.choose_action(processed_obs_for_agent, action_mask)
+                actions_to_take_dict[agent_id] = RL.choose_action(processed_obs_for_agent,action_mask)
 
             # Act
             next_observations_dict, rewards_dict, terminated_dict, truncated_dict, next_infos_dict = env.step(
@@ -112,7 +121,7 @@ def run_pursuit_parallel():
                 s = current_processed_observations[agent_id_acted]
                 a = actions_to_take_dict[agent_id_acted]
                 r = rewards_dict.get(agent_id_acted, 0.0)
-                terminated = terminated_dict.get(agent_id_acted, False)
+                terminated = terminated_dict.get(agent_id_acted, False) or truncated_dict.get(agent_id_acted, False)
 
                 if agent_id_acted in next_observations_dict:
                     s_prime = change_observation(next_observations_dict[agent_id_acted] )

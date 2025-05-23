@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
+import random
 
 
 class QNetwork(nn.Module):
@@ -45,7 +46,6 @@ class DeepQNetwork:
         self.batch_size = batch_size
         self.epsilon_increment = e_greedy_increment
         self.epsilon = 0 if e_greedy_increment is not None else self.epsilon_max
-
         self.device = device
 
         self.learn_step_counter = 0
@@ -68,7 +68,7 @@ class DeepQNetwork:
         self.memory_counter += 1
 
     def choose_action(self, observation, action_mask, execution=False):
-        current_epsilon = 0.9 if execution else self.epsilon
+        current_epsilon = 0.90 if execution else self.epsilon
         if np.random.uniform() < current_epsilon:
             observation_tensor = torch.FloatTensor(observation).unsqueeze(0).to(self.device)
             with torch.no_grad():
@@ -105,13 +105,11 @@ class DeepQNetwork:
         next_states = torch.FloatTensor(batch_memory[:, self.n_features + 2: self.n_features * 2 + 2]).to(self.device)
         dones = torch.FloatTensor(batch_memory[:, self.n_features * 2 + 2]).to(self.device)
         q_eval = self.eval_net(states).gather(1, actions).squeeze(1)
-
         q_next_all = self.target_net(next_states).detach()
         q_next_max = q_next_all.max(1)[0]
         q_target = rewards + self.gamma * q_next_max * (1 - dones)
         # loss
         loss = F.mse_loss(q_eval, q_target)
-
         self.cost_his.append(loss.item())
 
         # Optimize
